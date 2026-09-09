@@ -217,6 +217,12 @@
         <label class="inline"><input type="checkbox" id="setAutoClean"> Keep only event video (auto-delete quiet chunks at End Night)</label>
       </div>
       <div class="row">
+        <label class="inline"><input type="checkbox" id="setLarkOn"> 📨 Lark alerts — DM on fault + hourly heartbeat</label>
+        <input type="text" id="setLarkKey" placeholder="alert key" style="width:170px">
+        <button id="btnLarkTest">Test DM</button>
+        <span class="hint" id="larkStatus"></span>
+      </div>
+      <div class="row">
         <label class="inline">Camera capture <select id="setCamRes"><option value="3840">4K (3840×2160) — max QR/detection detail</option><option value="2560">1440p (2560×1440) — balanced</option><option value="1920">1080p (1920×1080) — weak laptop</option></select></label>
         <label class="inline"><input type="checkbox" id="setLowCpu"> Low-power mode (weak laptop: smaller + 5 fps preview, much less GPU/CPU; detection unaffected)</label>
       </div>
@@ -10418,6 +10424,7 @@ const S = {
 const DEF = {
   det: { offLuma: 28, onLuma: 45, debounce: 3, staticDiff: 1.2, staticSecs: 120, glitchDiff: 45, bodyStretch: 2.6, graceSecs: 180 },
   camRes: 3840, lowCpu: false,
+  lark: { enabled: false, key: "", url: "https://refurbish-department-workstation.netlify.app/.netlify/functions/monitor-alert" },
   rec: { enabled: true, chunkMin: 20, mbps: 6, width: 1920, fps: 10, autoClean: true },
   demo: false,
   zones: [],
@@ -11272,6 +11279,18 @@ async function logEvent(z, type, detail) {
   if (ev.type !== "INFO") { try { await snapshot(ev, z); } catch (e) {} }
   appendEventRow(ev);
   scheduleEventsWrite();
+  if (S.mode === "monitoring" && FAULT_TYPES.includes(ev.type))
+    sendLark("fault", { serial: ev.serial, event: ev.type, detail: String(ev.detail).slice(0, 300), time: ev.time });
+}
+// best-effort DM bridge to the workstation site's Lark bot (fault / heartbeat / start / end)
+function sendLark(kind, payload) {
+  const L = CFG.lark || {};
+  if (!L.enabled || !L.url) return Promise.resolve(false);
+  return fetch(L.url, {
+    method: "POST", keepalive: true,
+    headers: { "content-type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ key: L.key || "", kind, ...payload }),
+  }).then(r => r.json()).then(d => !!d.ok).catch(() => false);
 }
 // events hitting 2+ different units within ~2s cannot be simultaneous unit faults —
 // only the room does that (person, lighting, power). Reclassify as bench disturbance.
@@ -11480,6 +11499,16 @@ async function startMonitoring() {
   evFilter.innerHTML = "<option value=''>All units</option>" + S.zones.map(z => "<option>" + escapeHtml(z.serial) + "</option>").join("");
   refreshUnitTable(true);
   banner("");
+  sendLark("start", { units: S.zones.length, time: new Date().toLocaleTimeString("en-GB") });
+  clearInterval(S.larkHb);
+  S.larkHb = setInterval(() => {
+    sendLark("heartbeat", {
+      units: S.zones.filter(z => z.isOn).length + "/" + S.zones.length,
+      events: realEventCount(),
+      mbps: S.rec && S.rec.lastMbps,
+      elapsed: fmtDur(Date.now() - S.session.start),
+    });
+  }, 3600000);
 }
 async function stopMonitoring() {
   if (!confirm("End the night session?")) return;
@@ -11509,6 +11538,12 @@ async function stopMonitoring() {
       await writeFile(S.session.dir, "events.json", new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
     } catch (e) {}
   }
+  clearInterval(S.larkHb);
+  sendLark("end", {
+    events: realEventCount(),
+    flagged: S.zones.filter(z => z.ev.off + z.ev.restart + z.ev.stuck + z.ev.glitch > 0).map(z => z.serial).join(", "),
+    time: new Date().toLocaleTimeString("en-GB"),
+  });
   setMode("idle");
   showTab("units");
   refreshUnitTable(true);
@@ -11679,6 +11714,18 @@ $("setAutoClean").checked = CFG.rec.autoClean;
 $("setAutoClean").onchange = e => { CFG.rec.autoClean = e.target.checked; saveCfg(); };
 $("setRecWidth").value = String(CFG.rec.width || 1920);
 $("setRecWidth").onchange = e => { CFG.rec.width = parseInt(e.target.value, 10) || 1920; saveCfg(); };
+$("setLarkOn").checked = !!(CFG.lark && CFG.lark.enabled);
+$("setLarkOn").onchange = e => { CFG.lark.enabled = e.target.checked; saveCfg(); };
+$("setLarkKey").value = (CFG.lark && CFG.lark.key) || "";
+$("setLarkKey").onchange = e => { CFG.lark.key = e.target.value.trim(); saveCfg(); };
+$("btnLarkTest").onclick = async () => {
+  const was = CFG.lark.enabled;
+  CFG.lark.enabled = true;
+  $("larkStatus").textContent = "sending…";
+  const ok = await sendLark("test", {});
+  CFG.lark.enabled = was;
+  $("larkStatus").textContent = ok ? "✓ DM sent — check your Lark" : "✗ failed — check key / Netlify env vars / redeploy";
+};
 $("setCamRes").value = String(CFG.camRes || 3840);
 $("setCamRes").onchange = e => {
   CFG.camRes = parseInt(e.target.value, 10) || 3840; saveCfg();
