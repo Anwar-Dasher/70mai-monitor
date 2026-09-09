@@ -11148,9 +11148,11 @@ function tick() {
       nowT - S.session.start > (CFG.det.graceSecs || 0) * 1000) {
     S.session.graceChecked = true;
     for (const z of S.zones) {
-      if (z.serial && z.isOn === false && z.everOn) {
+      if (z.serial && z.isOn === false) {
         z.ev.off++;
-        logEvent(z, "AUTO_OFF", "Screen still dark when startup grace ended — went off during setup and never recovered");
+        logEvent(z, "AUTO_OFF", z.everOn
+          ? "Screen still dark when startup grace ended — went off during setup and never recovered"
+          : "Screen NEVER seen on — unit was already dark at session start (dead unit or outline mis-aimed)");
       }
     }
   }
