@@ -38,6 +38,60 @@
         document.body.appendChild(b);
       });
     })();
+    // Lark alert sidecar: the app writes a snapshot file for every event and a rec_*.webm
+    // per video chunk — watching file creation gives us fault DMs + heartbeats without
+    // touching the compiled bundle. Arm once with ?larkkey=<key> (?larkkey=off to disarm).
+    (function () {
+      var p = new URLSearchParams(location.search);
+      if (p.has("larkkey")) {
+        var k = String(p.get("larkkey") || "");
+        try { (k && k !== "off") ? localStorage.setItem("s600larkkey", k) : localStorage.removeItem("s600larkkey"); } catch (e) {}
+      }
+      var key = "";
+      try { key = localStorage.getItem("s600larkkey") || ""; } catch (e) {}
+      if (!key || !window.FileSystemDirectoryHandle) return;
+      var URL_ = "https://refurbish-department-workstation.netlify.app/.netlify/functions/monitor-alert";
+      function send(kind, payload) {
+        var body = Object.assign({ key: key, kind: kind }, payload || {});
+        return fetch(URL_, { method: "POST", keepalive: true, headers: { "content-type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) })
+          .then(function (r) { return r.json(); }).then(function (d) { return !!d.ok; }).catch(function () { return false; });
+      }
+      var st = { started: false, lastChunk: 0, seen: {}, hb: null };
+      function onFile(name) {
+        var now = Date.now();
+        if (/^rec_\d+\.webm$/.test(name)) {
+          st.lastChunk = now;
+          if (!st.started) {
+            st.started = true;
+            send("start", { units: "?", time: new Date().toLocaleTimeString("en-GB") });
+            clearInterval(st.hb);
+            st.hb = setInterval(function () {
+              if (Date.now() - st.lastChunk < 25 * 60000) send("heartbeat", { units: "recording", events: Object.keys(st.seen).length, elapsed: "react build" });
+            }, 3600000);
+          }
+          return;
+        }
+        var m = name.match(/^e[\w]+_(.+)_([A-Z_]+)_(\d{6})_zone\.jpe?g$/i);
+        if (!m) return;
+        var serial = m[1], type = m[2].toUpperCase(), t = m[3];
+        if (type === "DISTURBANCE" || type === "INFO") return; // bench-level / info — not unit faults
+        if (st.seen[name]) return;
+        st.seen[name] = 1;
+        send("fault", { serial: serial, event: type, detail: "detected by react build (snapshot " + name + ")", time: t.replace(/(\d\d)(\d\d)(\d\d)/, "$1:$2:$3") });
+      }
+      var orig = FileSystemDirectoryHandle.prototype.getFileHandle;
+      FileSystemDirectoryHandle.prototype.getFileHandle = function (name, opts) {
+        try { if (opts && opts.create) onFile(String(name)); } catch (e) {}
+        return orig.apply(this, arguments);
+      };
+      window.__larkTest = function () { return send("test", {}); };
+      window.addEventListener("load", function () {
+        var b = document.createElement("div");
+        b.textContent = "📨 Lark alerts armed (?larkkey=off to disarm)";
+        b.style.cssText = "position:fixed;bottom:20px;left:8px;z-index:9999;font:11px sans-serif;color:#34d399;opacity:.8;pointer-events:none";
+        document.body.appendChild(b);
+      });
+    })();
     </script>
     <script type="module" crossorigin src="assets/index-Br0gyQ0A.js"></script>
     <link rel="stylesheet" crossorigin href="assets/index-CGZ-bQEe.css">
