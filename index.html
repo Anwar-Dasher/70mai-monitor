@@ -11145,7 +11145,8 @@ function tick() {
   if (!S.video.videoWidth || !S.zones.length) return;
   // end-of-grace sweep: a unit that went dark DURING grace and never came back is a real fault
   if (S.mode === "monitoring" && S.session && !S.session.graceChecked &&
-      nowT - S.session.start > (CFG.det.graceSecs || 0) * 1000) {
+      nowT - S.session.start > Math.max((CFG.det.graceSecs || 0) * 1000, 6000) &&
+      !S.zones.some(z => z.serial && z.isOn === null)) { // wait until every unit's state has settled
     S.session.graceChecked = true;
     for (const z of S.zones) {
       if (z.serial && z.isOn === false) {
