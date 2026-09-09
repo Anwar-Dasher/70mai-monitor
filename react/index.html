@@ -74,7 +74,7 @@
         var m = name.match(/^e[\w]+_(.+)_([A-Z_]+)_(\d{6})_zone\.jpe?g$/i);
         if (!m) return;
         var serial = m[1], type = m[2].toUpperCase(), t = m[3];
-        if (type === "DISTURBANCE" || type === "INFO" || type === "TRACK_MOVE") return; // not unit faults
+        if (type === "DISTURBANCE" || type === "INFO") return; // bench-level / info — not unit faults
         if (st.seen[name]) return;
         st.seen[name] = 1;
         send("fault", { serial: serial, event: type, detail: "detected by react build (snapshot " + name + ")", time: t.replace(/(\d\d)(\d\d)(\d\d)/, "$1:$2:$3") });
@@ -93,10 +93,11 @@
       });
     })();
     </script>
-    <script type="module" crossorigin src="assets/index-IRfNRpNj.js"></script>
-    <link rel="stylesheet" crossorigin href="assets/index-B-w3FI4v.css">
+    <script type="module" crossorigin src="assets/index-Br0gyQ0A.js"></script>
+    <link rel="stylesheet" crossorigin href="assets/index-CGZ-bQEe.css">
   </head>
   <body>
     <div id="root"></div>
   </body>
 </html>
+
