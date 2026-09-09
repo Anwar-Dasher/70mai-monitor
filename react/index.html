@@ -9,6 +9,36 @@
     <meta property="og:description" content="Automated bench QA monitoring system for dashcams with QR barcode tracking, screen luminance detection, and overnight failure reporting." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+    // Capture-resolution cap for weak laptops (the app itself forces 4K).
+    // Use ?cap=2560 (1440p), ?cap=1920 (1080p), ?cap=0 (back to native 4K). Choice is remembered.
+    (function () {
+      var p = new URLSearchParams(location.search);
+      if (p.has("cap")) {
+        var v = parseInt(p.get("cap"), 10) || 0;
+        try { v ? localStorage.setItem("s600cap", String(v)) : localStorage.removeItem("s600cap"); } catch (e) {}
+      }
+      var cap = 0;
+      try { cap = parseInt(localStorage.getItem("s600cap") || "0", 10) || 0; } catch (e) {}
+      if (!cap || !navigator.mediaDevices) return;
+      var gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = function (c) {
+        try {
+          if (c && c.video && typeof c.video === "object") {
+            c.video.width = { ideal: cap, min: 640 };
+            c.video.height = { ideal: Math.round(cap * 9 / 16), min: 360 };
+          }
+        } catch (e) {}
+        return gum(c);
+      };
+      window.addEventListener("load", function () {
+        var b = document.createElement("div");
+        b.textContent = "⚡ capture capped at " + cap + "px (?cap=0 to reset)";
+        b.style.cssText = "position:fixed;bottom:6px;left:8px;z-index:9999;font:11px sans-serif;color:#f5a623;opacity:.8;pointer-events:none";
+        document.body.appendChild(b);
+      });
+    })();
+    </script>
     <script type="module" crossorigin src="assets/index-Br0gyQ0A.js"></script>
     <link rel="stylesheet" crossorigin href="assets/index-CGZ-bQEe.css">
   </head>
