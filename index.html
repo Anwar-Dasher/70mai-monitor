@@ -174,12 +174,16 @@
       <div class="row" id="selZoneBox" style="display:none">
         <span class="kv">Selected <b id="selZoneLbl"></b></span>
         <button id="btnReplace">Re-place unit</button>
+        <button id="btnCalZone" title="Measure this unit's lit screen + black bezel and set its own OFF/ON thresholds (screen must be on)">🎨 Calibrate</button>
         <button id="btnRemoveZone" class="danger">Remove unit</button>
         <button id="btnDeselect">Deselect</button>
         <span class="hint">Drag the outline to move it; drag a corner to resize.</span>
+        <span class="hint" id="selCalInfo"></span>
       </div>
       <div class="row">
         <button id="btnClearAll">Clear all units</button>
+        <button id="btnCalAll" title="With every screen lit: measure each unit's own lit brightness + bezel and set per-unit OFF/ON thresholds (far / angled screens read dimmer than near ones)">🎨 Calibrate all units</button>
+        <button id="btnCalClear" title="Back to the global OFF/ON thresholds for every unit">Clear calibration</button>
         <span class="hint" id="assignSummary">0 units</span>
       </div>
 
@@ -275,6 +279,7 @@
         <li><b>1 Enable Camera</b> — pick the Logitech. Aim it at the bench; every dashcam screen must be visible.</li>
         <li><b>2 Choose Save Folder</b> — a <code>night_…</code> folder is created per session (video chunks, snapshots, events.json, report).</li>
         <li><b>3 Add Units (QR)</b> — hold a unit's QR code up to the camera → <b>beep</b>, serial captured. Then place the unit on the bench: the system finds where the new screen lit up and draws an outline with the serial (double beep). The outline is stretched sideways to cover the long dashcam body (adjust <b>Outline stretch ×</b> in settings); detection itself watches only the screen inside it — shown as a white dashed box when you select a unit. Repeat for every unit, in any positions — the number is just the sequence you added them.</li>
+        <li><b>🎨 Calibrate all units</b> (once all screens are on, before Start Monitoring) — measures each unit's own lit brightness and black bezel and gives it its own OFF/ON thresholds. Do this on a full rack: far or angled screens read dimmer than near ones, and one global threshold can leave a far unit's lit screen hovering near "OFF". Units show 🎨off/on in the Units table; <b>Clear calibration</b> returns to the global thresholds.</li>
         <li>If an outline lands wrong: click it → Remove, then use <b>Draw outline manually</b> (drag a box around the screen) — it takes the pending serial. You can also drag/resize a selected outline.</li>
         <li><b>4 Start Monitoring</b> — leave the tab open and in the foreground all night; the page keeps the screen awake. Point the monitor away from the bench or dim it.</li>
         <li>Morning — <b>Units / Report</b>: clean units are done; flagged units have timestamped events + snapshots in the night folder for the DMD warranty claim.</li>
@@ -10463,7 +10468,7 @@ function loadCfg() {
   return structuredClone(DEF);
 }
 function saveCfg() {
-  CFG.zones = S.zones.map(z => ({ x: z.x, y: z.y, w: z.w, h: z.h, serial: z.serial, scr: z.scr }));
+  CFG.zones = S.zones.map(z => ({ x: z.x, y: z.y, w: z.w, h: z.h, serial: z.serial, scr: z.scr, cal: z.cal || null }));
   try { localStorage.setItem(LS_KEY, JSON.stringify(CFG)); } catch (e) {}
 }
 
@@ -10504,9 +10509,57 @@ function removeZone(i) {
 function restoreZones() {
   S.zones = [];
   for (const zc of CFG.zones || []) {
-    if (zc.serial) S.zones.push(newZone({ x: zc.x, y: zc.y, w: zc.w, h: zc.h }, zc.serial, zc.scr));
+    if (zc.serial) { const z = newZone({ x: zc.x, y: zc.y, w: zc.w, h: zc.h }, zc.serial, zc.scr); z.cal = zc.cal || null; S.zones.push(z); }
   }
   refreshAssignUI();
+}
+/* ================= per-unit color / bezel calibration ================= */
+// One global OFF/ON threshold suits the near units; far or angled screens read dimmer.
+// Calibration measures THIS unit's lit central luma and the black bezel around its screen
+// and sets its own thresholds: OFF at 35% of the way from bezel to lit, ON at 65%.
+function bezelLumaOf(z) {
+  try {
+    const vw = S.video.videoWidth, vh = S.video.videoHeight;
+    actx.drawImage(S.video, z.x * vw, z.y * vh, Math.max(2, z.w * vw), Math.max(2, z.h * vh), 0, 0, 48, 48);
+    const d = actx.getImageData(0, 0, 48, 48).data, s = z.scr;
+    const sx0 = s.fx * 48 - 1, sy0 = s.fy * 48 - 1, sx1 = (s.fx + s.fw) * 48 + 1, sy1 = (s.fy + s.fh) * 48 + 1;
+    let sum = 0, n = 0;
+    for (let y = 0; y < 48; y++) for (let x = 0; x < 48; x++) {
+      if (x >= sx0 && x <= sx1 && y >= sy0 && y <= sy1) continue; // screen (+1px ring) excluded
+      const p = (y * 48 + x) * 4;
+      sum += 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2]; n++;
+    }
+    return n >= 60 ? sum / n : null;
+  } catch (e) { return null; }
+}
+function calibrateZone(z, quiet) {
+  if (!S.video.videoWidth) { if (!quiet) banner("Enable the camera first."); return false; }
+  sampleZone(z, S.video.videoWidth, S.video.videoHeight);
+  const lit = z.lumaC ?? z.luma;
+  const bezelRaw = bezelLumaOf(z);
+  const bezel = bezelRaw ?? Math.max(10, lit * 0.25);
+  if (lit < bezel + 12) { if (!quiet) banner("#" + (z.i + 1) + " " + z.serial + ": the screen must be ON to calibrate (reads L" + lit.toFixed(0) + ", bezel " + bezel.toFixed(0) + ")."); return false; }
+  const baseOff = clamp(bezel + 4, 12, 35), baseOn = Math.max(lit, baseOff + 20);
+  z.cal = {
+    lit: Math.round(lit * 10) / 10, bezel: Math.round(bezel * 10) / 10,
+    off: Math.round(baseOff + (baseOn - baseOff) * 0.35), on: Math.round(baseOff + (baseOn - baseOff) * 0.65),
+    at: Date.now(),
+  };
+  z.isOn = null; z.pendRaw = null; z.pendN = 0; // re-judge with the new thresholds
+  return true;
+}
+function calibrateAll() {
+  if (S.mode === "monitoring") return banner("Stop monitoring first — calibrate after placing the units, before Start Monitoring.");
+  if (!S.zones.length) return banner("Add units first.");
+  let ok = 0; const skipped = [];
+  for (const z of S.zones) { if (calibrateZone(z, true)) ok++; else skipped.push("#" + (z.i + 1)); }
+  saveCfg(); refreshUnitTable(true); if (S.selZone != null) selectZone(S.selZone);
+  banner("🎨 Calibrated " + ok + " of " + S.zones.length + " units" + (skipped.length ? " — skipped (screen not lit): " + skipped.join(", ") : "") + ". Per-unit OFF/ON thresholds now in use.");
+}
+function clearCalibration() {
+  for (const z of S.zones) z.cal = null;
+  saveCfg(); refreshUnitTable(true); if (S.selZone != null) selectZone(S.selZone);
+  banner("Calibration cleared — global OFF/ON thresholds in use for all units.");
 }
 
 /* ================= audio feedback ================= */
@@ -11029,7 +11082,13 @@ function setDrawMode(on) {
 function selectZone(i) {
   S.selZone = i;
   $("selZoneBox").style.display = i == null ? "none" : "";
-  if (i != null) $("selZoneLbl").textContent = "#" + (i + 1) + " — " + S.zones[i].serial;
+  if (i != null) {
+    const z = S.zones[i];
+    $("selZoneLbl").textContent = "#" + (i + 1) + " — " + z.serial;
+    $("selCalInfo").textContent = z.cal
+      ? "calibrated: lit L" + z.cal.lit.toFixed(0) + " · bezel L" + z.cal.bezel.toFixed(0) + " → OFF < " + z.cal.off + " · ON > " + z.cal.on
+      : "not calibrated — using global OFF < " + CFG.det.offLuma + " · ON > " + CFG.det.onLuma;
+  }
 }
 
 /* ================= render loop ================= */
@@ -11190,7 +11249,8 @@ function tick() {
   for (const z of S.zones) {
     sampleZone(z, vw, vh);
     const lum = z.lumaC ?? z.luma; // on/off judged on the screen's central region
-    const rawOn = z.isOn == null ? lum > st.onLuma : (z.isOn ? lum >= st.offLuma : lum > st.onLuma);
+    const offT = z.cal ? z.cal.off : st.offLuma, onT = z.cal ? z.cal.on : st.onLuma; // calibrated per unit when available
+    const rawOn = z.isOn == null ? lum > onT : (z.isOn ? lum >= offT : lum > onT);
     if (rawOn === z.pendRaw) z.pendN++;
     else { z.pendRaw = rawOn; z.pendN = 1; }
     const stable = z.pendN >= st.debounce;
@@ -11837,7 +11897,7 @@ function refreshUnitTable(force) {
   for (const z of S.zones) {
     const n = z.ev.off + z.ev.restart + z.ev.stuck + z.ev.glitch;
     const state = (z.isOn == null ? "…" : z.isOn ? (z.stuckFlag ? "STUCK" : "ON") : "OFF") +
-      " <span class='hint'>L" + (z.lumaC ?? z.luma ?? 0).toFixed(0) + " d" + (z.diff || 0).toFixed(1) + "</span>";
+      " <span class='hint'>L" + (z.lumaC ?? z.luma ?? 0).toFixed(0) + " d" + (z.diff || 0).toFixed(1) + (z.cal ? " 🎨" + z.cal.off + "/" + z.cal.on : "") + "</span>";
     const verdict = S.mode === "monitoring" || S.session
       ? (n ? "<span class='badge flag'>FLAGGED (" + n + ")</span>" : "<span class='badge clean'>CLEAN</span>")
       : "<span class='badge off'>—</span>";
@@ -11949,6 +12009,13 @@ $("btnRemoveZone").onclick = () => {
   if (S.selZone != null) removeZone(S.selZone);
 };
 $("btnDeselect").onclick = () => selectZone(null);
+$("btnCalZone").onclick = () => {
+  if (S.selZone == null) return;
+  const z = S.zones[S.selZone];
+  if (calibrateZone(z)) { saveCfg(); refreshUnitTable(true); selectZone(S.selZone); banner("🎨 #" + (z.i + 1) + " " + z.serial + " calibrated: lit L" + z.cal.lit.toFixed(0) + ", bezel L" + z.cal.bezel.toFixed(0) + " → OFF < " + z.cal.off + ", ON > " + z.cal.on); }
+};
+$("btnCalAll").onclick = calibrateAll;
+$("btnCalClear").onclick = clearCalibration;
 $("btnExpDown").onclick = () => nudgeExposure(-1);
 $("btnExpUp").onclick = () => nudgeExposure(1);
 $("btnExpAuto").onclick = autoExposure;
