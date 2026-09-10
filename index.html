@@ -11428,6 +11428,24 @@ async function startChunk() {
   r.start(1000);
   S.rec.chunks++;
   $("stChunks").textContent = S.rec.chunks;
+  // stall watch: measure THIS chunk's growth every 60s; if it stops growing for
+  // ~4 min while recording, the pipeline stalled (tab throttled / crashing / OOM).
+  S.rec.curChunk = { fh, name, lastSize: 0, lastGrowAt: Date.now() };
+  S.rec.stallAlerted = false;
+  clearInterval(S.rec.stallTimer);
+  S.rec.stallTimer = setInterval(async () => {
+    try {
+      if (!S.rec?.curChunk) return;
+      const f = await S.rec.curChunk.fh.getFile();
+      const now = Date.now();
+      if (f.size > S.rec.curChunk.lastSize) { S.rec.curChunk.lastSize = f.size; S.rec.curChunk.lastGrowAt = now; S.rec.stallAlerted = false; }
+      else if (!S.rec.stallAlerted && now - S.rec.curChunk.lastGrowAt > 240000) {
+        S.rec.stallAlerted = true;
+        banner("⚠ Recording stalled — video stopped being written. Check the laptop / reload the page.");
+        sendLark("stalled", { detail: "chunk " + S.rec.curChunk.name + " stopped growing at " + Math.round(S.rec.curChunk.lastSize / 1e6) + " MB", time: new Date().toLocaleTimeString("en-GB") });
+      }
+    } catch (e) {}
+  }, 60000);
 }
 async function stopChunk() {
   const rec = S.rec; if (!rec?.recorder) return;
@@ -11457,7 +11475,7 @@ async function measureLastChunk() {
 }
 async function stopRecording() {
   if (!S.rec) return;
-  clearInterval(S.rec.chunkTimer); clearInterval(S.rec.drawTimer);
+  clearInterval(S.rec.chunkTimer); clearInterval(S.rec.drawTimer); clearInterval(S.rec.stallTimer);
   await stopChunk();
   S.rec = null;
   $("recPill").style.display = "none";
