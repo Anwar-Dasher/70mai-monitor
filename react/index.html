@@ -56,14 +56,33 @@
         return fetch(URL_, { method: "POST", keepalive: true, headers: { "content-type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) })
           .then(function (r) { return r.json(); }).then(function (d) { return !!d.ok; }).catch(function () { return false; });
       }
-      var st = { started: false, lastChunk: 0, seen: {}, hb: null };
-      function onFile(name) {
+      var st = { started: false, lastChunk: 0, seen: {}, hb: null, curName: "", curDir: null, lastSize: 0, lastGrowAt: 0, stallAlerted: false, watch: null };
+      function startStallWatch() {
+        if (st.watch) return;
+        // Every 60s: measure the current chunk's size. A healthy MediaRecorder grows
+        // the file every second; if it hasn't grown for ~4 min the recording stalled
+        // (tab throttled / crashing / out of memory) — DM once, re-arm on recovery.
+        st.watch = setInterval(function () {
+          if (!st.curDir || !st.curName) return;
+          st.curDir.getFileHandle(st.curName).then(function (h) { return h.getFile(); }).then(function (f) {
+            var now = Date.now();
+            if (f.size > st.lastSize) { st.lastSize = f.size; st.lastGrowAt = now; st.stallAlerted = false; }
+            else if (!st.stallAlerted && st.lastGrowAt && now - st.lastGrowAt > 4 * 60000) {
+              st.stallAlerted = true;
+              send("stalled", { detail: "chunk " + st.curName + " stopped growing at " + Math.round(st.lastSize / 1e6) + " MB", time: new Date().toLocaleTimeString("en-GB") });
+            }
+          }).catch(function () {});
+        }, 60000);
+      }
+      function onFile(name, dir) {
         var now = Date.now();
         if (/^rec_\d+\.webm$/.test(name)) {
           st.lastChunk = now;
+          st.curName = name; st.curDir = dir || st.curDir; st.lastSize = 0; st.lastGrowAt = now; st.stallAlerted = false;
           if (!st.started) {
             st.started = true;
             send("start", { units: "?", time: new Date().toLocaleTimeString("en-GB") });
+            startStallWatch();
             clearInterval(st.hb);
             st.hb = setInterval(function () {
               if (Date.now() - st.lastChunk < 25 * 60000) send("heartbeat", { units: "recording", events: Object.keys(st.seen).length, elapsed: "react build" });
@@ -81,7 +100,7 @@
       }
       var orig = FileSystemDirectoryHandle.prototype.getFileHandle;
       FileSystemDirectoryHandle.prototype.getFileHandle = function (name, opts) {
-        try { if (opts && opts.create) onFile(String(name)); } catch (e) {}
+        try { if (opts && opts.create) onFile(String(name), this); } catch (e) {}
         return orig.apply(this, arguments);
       };
       window.__larkTest = function () { return send("test", {}); };
