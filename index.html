@@ -114,7 +114,12 @@
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 50;
     align-items: center; justify-content: center; cursor: zoom-out;
   }
-  #shotModal img { max-width: 94vw; max-height: 92vh; border-radius: 8px; }
+  #shotModal img, #shotModal video { max-width: 94vw; max-height: 92vh; border-radius: 8px; }
+  #shotModal video { cursor: default; background: #000; }
+  #clipModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 60; align-items: center; justify-content: center; }
+  .clipBox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; width: min(520px, 92vw); }
+  .clipBar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  #clipFill { height: 100%; width: 0; background: var(--ok); transition: width .3s; }
   .kv { color: var(--muted); }
   .kv b { color: var(--text); font-weight: 600; }
   ul.tips { margin: 6px 0; padding-left: 18px; color: var(--muted); }
@@ -217,6 +222,12 @@
         <label class="inline"><input type="checkbox" id="setAutoClean"> Keep only event video (auto-delete quiet chunks at End Night)</label>
       </div>
       <div class="row">
+        <label class="inline"><input type="checkbox" id="setClips"> 🎬 Event clips at End Night — cut a short clip around every fault (parking-surveillance style)</label>
+        <label class="inline">before (s) <input type="number" id="setClipPre" min="10" max="600"></label>
+        <label class="inline">after (s) <input type="number" id="setClipPost" min="10" max="600"></label>
+        <label class="inline"><input type="checkbox" id="setClipsOnly"> then delete ALL raw chunks (keep only clips + snapshots)</label>
+      </div>
+      <div class="row">
         <label class="inline"><input type="checkbox" id="setLarkOn"> 📨 Lark alerts — DM on fault + hourly heartbeat</label>
         <input type="text" id="setLarkKey" placeholder="alert key" style="width:170px">
         <button id="btnLarkTest">Test DM</button>
@@ -247,6 +258,7 @@
     <div class="tabPane" id="tab-units">
       <div class="row">
         <button id="btnReport" class="primary">Copy morning report</button>
+        <button id="btnClipFolder" title="Pick a past night_… folder: cuts a clip around every fault event from its rec_*.webm chunks (also works after a crashed night)">🎬 Make clips from a night folder…</button>
         <span class="hint" id="reportHint"></span>
       </div>
       <div class="scroller">
@@ -266,6 +278,7 @@
         <li>If an outline lands wrong: click it → Remove, then use <b>Draw outline manually</b> (drag a box around the screen) — it takes the pending serial. You can also drag/resize a selected outline.</li>
         <li><b>4 Start Monitoring</b> — leave the tab open and in the foreground all night; the page keeps the screen awake. Point the monitor away from the bench or dim it.</li>
         <li>Morning — <b>Units / Report</b>: clean units are done; flagged units have timestamped events + snapshots in the night folder for the DMD warranty claim.</li>
+        <li><b>Event clips</b> (parking-surveillance style) — at End Night the system cuts a short clip around every fault (default 60 s before → 60 s after) into <code>clips/</code>: full bench view with the unit outlined, a zoomed inset of that unit, and a T−/T+ counter. Each clip takes as long as its length to make, so End Night waits ~2 min per fault. Press <b>▶ clip</b> in the Events tab to watch one, <b>🎬</b> to cut one right away, or <b>Make clips from a night folder…</b> for a past night (works even if the tab crashed before End Night).</li>
       </ul>
       <h3>QR scanning tips</h3>
       <ul class="tips">
@@ -293,7 +306,14 @@
     </div>
   </section>
 </main>
-<div id="shotModal"><img id="shotImg" alt="snapshot"></div>
+<div id="shotModal"><img id="shotImg" alt="snapshot"><video id="shotVid" controls style="display:none"></video></div>
+<div id="clipModal"><div class="clipBox">
+  <h3 style="margin:0 0 6px">🎬 Making event clips</h3>
+  <div id="clipMsg" class="hint"></div>
+  <div class="clipBar"><div id="clipFill"></div></div>
+  <div class="hint">Each clip takes as long as its length to produce (the video is replayed and re-encoded). Keep this tab in front.</div>
+  <div class="row" style="margin-top:10px"><button id="btnClipCancel">Skip the remaining clips</button></div>
+</div></div>
 
 <script>
 (function webpackUniversalModuleDefinition(root, factory) {
@@ -10425,7 +10445,7 @@ const DEF = {
   det: { offLuma: 28, onLuma: 45, debounce: 3, staticDiff: 1.2, staticSecs: 120, glitchDiff: 45, bodyStretch: 2.6, graceSecs: 180 },
   camRes: 3840, lowCpu: false,
   lark: { enabled: false, key: "", url: "https://refurbish-department-workstation.netlify.app/.netlify/functions/monitor-alert" },
-  rec: { enabled: true, chunkMin: 20, mbps: 6, width: 1920, fps: 10, autoClean: true },
+  rec: { enabled: true, chunkMin: 20, mbps: 6, width: 1920, fps: 10, autoClean: true, clips: true, clipPre: 60, clipPost: 60, clipsOnly: false },
   demo: false,
   zones: [],
 };
@@ -11364,6 +11384,13 @@ function appendEventRow(ev) {
     img.onclick = () => { $("shotImg").src = ev.shotUrl; $("shotModal").style.display = "flex"; };
     tr.children[4].appendChild(img);
   }
+  if (S.session?.dir && ev.type !== "INFO") {
+    const cb = document.createElement("button");
+    cb.style.cssText = "padding:2px 8px;font-size:12px;margin-right:4px;white-space:nowrap";
+    if (ev.clipFile) { cb.textContent = "▶ clip"; cb.title = "Play " + ev.clipFile; cb.onclick = () => playClip(ev.clipFile, S.session.dir); }
+    else { cb.textContent = "🎬"; cb.title = "Cut a video clip around this event (" + (CFG.rec.clipPre ?? 60) + " s before → " + (CFG.rec.clipPost ?? 60) + " s after)"; cb.onclick = () => clipEvent(ev); }
+    tr.children[5].appendChild(cb);
+  }
   const del = document.createElement("button");
   del.textContent = "✕"; del.title = "Delete this record (mistake / false alarm)";
   del.style.cssText = "padding:2px 8px;font-size:12px;color:var(--bad)";
@@ -11421,30 +11448,29 @@ async function startChunk() {
   S.rec.recorder = r;
   r.ondataavailable = e => {
     if (e.data && e.data.size && S.rec.writable) {
-      const w = S.rec.writable;
-      S.rec.queue = S.rec.queue.then(() => w.write(e.data)).catch(() => {});
+      const w = S.rec.writable, rec = S.rec;
+      rec.queue = rec.queue.then(() => w.write(e.data)).then(() => {
+        rec.lastWriteAt = Date.now(); rec.written += e.data.size; rec.stallAlerted = false;
+      }).catch(() => {});
     }
   };
   r.start(1000);
   S.rec.chunks++;
   $("stChunks").textContent = S.rec.chunks;
-  // stall watch: measure THIS chunk's growth every 60s; if it stops growing for
-  // ~4 min while recording, the pipeline stalled (tab throttled / crashing / OOM).
-  S.rec.curChunk = { fh, name, lastSize: 0, lastGrowAt: Date.now() };
-  S.rec.stallAlerted = false;
+  // stall watch: an open chunk reads as 0 bytes until it is closed (Chrome writes to a
+  // swap file), so track the last SUCCESSFUL write instead of the file size. A healthy
+  // recorder writes every second; 4 min without one = pipeline stalled (throttled / OOM).
+  S.rec.curChunk = { fh, name };
+  S.rec.lastWriteAt = Date.now(); S.rec.written = 0; S.rec.stallAlerted = false;
   clearInterval(S.rec.stallTimer);
-  S.rec.stallTimer = setInterval(async () => {
-    try {
-      if (!S.rec?.curChunk) return;
-      const f = await S.rec.curChunk.fh.getFile();
-      const now = Date.now();
-      if (f.size > S.rec.curChunk.lastSize) { S.rec.curChunk.lastSize = f.size; S.rec.curChunk.lastGrowAt = now; S.rec.stallAlerted = false; }
-      else if (!S.rec.stallAlerted && now - S.rec.curChunk.lastGrowAt > 240000) {
-        S.rec.stallAlerted = true;
-        banner("⚠ Recording stalled — video stopped being written. Check the laptop / reload the page.");
-        sendLark("stalled", { detail: "chunk " + S.rec.curChunk.name + " stopped growing at " + Math.round(S.rec.curChunk.lastSize / 1e6) + " MB", time: new Date().toLocaleTimeString("en-GB") });
-      }
-    } catch (e) {}
+  S.rec.stallTimer = setInterval(() => {
+    const rec = S.rec; if (!rec?.curChunk) return;
+    const now = Date.now();
+    if (!rec.stallAlerted && now - rec.lastWriteAt > 240000) {
+      rec.stallAlerted = true;
+      banner("⚠ Recording stalled — video stopped being written. Check the laptop / reload the page.");
+      sendLark("stalled", { detail: "chunk " + rec.curChunk.name + " stopped at " + Math.round(rec.written / 1e6) + " MB, no write for " + fmtDur(now - rec.lastWriteAt), time: new Date().toLocaleTimeString("en-GB") });
+    }
   }, 60000);
 }
 async function stopChunk() {
@@ -11479,6 +11505,222 @@ async function stopRecording() {
   await stopChunk();
   S.rec = null;
   $("recPill").style.display = "none";
+}
+
+/* ================= event clips (parking-surveillance style) ================= */
+// A dashcam's parking mode keeps a rolling buffer and saves the seconds around a trigger.
+// Here the 20-min chunks ARE the buffer and the fault events are the triggers: for each
+// one we replay pre+post seconds of the covering chunk(s) into a canvas — bench view with
+// the unit outlined, a zoomed inset of that unit, and a T−/T+ counter — and re-encode it
+// into clips/clip_<serial>_<type>_<time>.webm. Real-time only (MediaRecorder cannot run
+// faster than playback), so a 2-min clip takes 2 min. Chunks are readable only once
+// closed (Chrome writes to a swap file until close()), so live clipping rotates first.
+const clipState = { running: false, cancel: false };
+function chunkWindows(chunks, endT) {
+  return chunks.map((c, i) => ({ name: c.name, start: c.start, end: chunks[i + 1] ? chunks[i + 1].start : endT }));
+}
+function waitEvent(el, name, ms) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => { el.removeEventListener(name, ok); rej(new Error(name + " timeout")); }, ms || 30000);
+    function ok() { clearTimeout(t); res(); }
+    el.addEventListener(name, ok, { once: true });
+  });
+}
+async function openChunkVideo(file) {
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.preload = "auto";
+  v.src = URL.createObjectURL(file);
+  await waitEvent(v, "loadedmetadata", 30000);
+  if (!isFinite(v.duration) || !v.duration) {
+    // MediaRecorder WebM carries no duration/cue index — seeking to "infinity" makes
+    // Chrome scan the file once, after which duration and seeking both work
+    v.currentTime = 1e101;
+    await waitEvent(v, "seeked", 180000);
+  }
+  return v;
+}
+function closeChunkVideo(v) { try { v.pause(); URL.revokeObjectURL(v.src); v.removeAttribute("src"); v.load(); } catch (e) {} }
+function drawClipFrame(cv, v, job, absMs) {
+  const x = cv.getContext("2d"), W = cv.width, H = cv.height;
+  x.drawImage(v, 0, 0, W, H);
+  const d = (absMs - job.t) / 1000, hot = Math.abs(d) < 2;
+  const o = job.outline;
+  if (o) {
+    x.strokeStyle = hot ? "#fbbf24" : "#ef4444"; x.lineWidth = hot ? 5 : 3;
+    x.strokeRect(o.x * W, o.y * H, o.w * W, o.h * H);
+    const pad = 0.08, vw = v.videoWidth, vh = v.videoHeight;
+    const sx = Math.max(0, o.x - o.w * pad) * vw, sy = Math.max(0, o.y - o.h * pad) * vh;
+    const sw = Math.max(8, Math.min(vw - sx, o.w * (1 + 2 * pad) * vw)), sh = Math.max(8, Math.min(vh - sy, o.h * (1 + 2 * pad) * vh));
+    let iw = Math.round(W * 0.34), ih = Math.round(iw * sh / sw);
+    if (ih > H * 0.45) { ih = Math.round(H * 0.45); iw = Math.round(ih * sw / sh); }
+    const ix = W - iw - 12, iy = 12;
+    x.fillStyle = "rgba(0,0,0,.6)"; x.fillRect(ix - 3, iy - 3, iw + 6, ih + 6);
+    x.drawImage(v, sx, sy, sw, sh, ix, iy, iw, ih);
+    x.strokeStyle = hot ? "#fbbf24" : "#fff"; x.lineWidth = 2; x.strokeRect(ix, iy, iw, ih);
+  }
+  x.fillStyle = "rgba(0,0,0,.65)"; x.fillRect(0, H - 36, W, 36);
+  x.fillStyle = hot ? "#fbbf24" : "#fff"; x.font = "bold 20px ui-monospace, Consolas, monospace"; x.textBaseline = "middle";
+  const tt = (d < 0 ? "T−" + Math.round(-d) : "T+" + Math.round(d)) + "s";
+  x.fillText(job.serial + "  ·  " + job.type + "  ·  " + job.time + "  ·  " + tt + (hot ? "  ◀ EVENT" : ""), 14, H - 18);
+  x.textAlign = "right"; x.fillText(new Date(absMs).toLocaleTimeString("en-GB"), W - 14, H - 18); x.textAlign = "left";
+}
+async function makeClip(job) {
+  const winStart = job.t - job.pre * 1000, winEnd = job.t + job.post * 1000;
+  const segs = job.chunks
+    .filter(c => c.end > winStart && c.start < winEnd)
+    .map(c => ({ c, from: (Math.max(winStart, c.start) - c.start) / 1000, to: (Math.min(winEnd, c.end) - c.start) / 1000 }));
+  if (!segs.length) throw new Error("no video chunk covers " + job.time);
+  const clipsDir = await job.dir.getDirectoryHandle("clips", { create: true });
+  const fh = await clipsDir.getFileHandle(job.outName, { create: true });
+  const writable = await fh.createWritable();
+  let queue = Promise.resolve();
+  const cv = document.createElement("canvas"), fps = 10, total = (winEnd - winStart) / 1000;
+  let recorder = null, stream = null, done = 0, first = true;
+  try {
+    for (const seg of segs) {
+      if (clipState.cancel) break;
+      let v;
+      try {
+        const f = await (await job.dir.getFileHandle(seg.c.name)).getFile();
+        if (!f.size) continue;
+        v = await openChunkVideo(f);
+      } catch (e) { continue; } // missing / unreadable chunk: skip that part of the window
+      const from = Math.max(0, Math.min(seg.from, v.duration - 0.2)), to = Math.min(seg.to, v.duration);
+      if (to - from < 0.3) { closeChunkVideo(v); continue; }
+      v.currentTime = from;
+      try { await waitEvent(v, "seeked", 60000); } catch (e) {}
+      if (first) {
+        first = false;
+        cv.width = 1280; cv.height = Math.round(1280 * v.videoHeight / v.videoWidth) || 720;
+        stream = cv.captureStream(fps);
+        const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find(m => MediaRecorder.isTypeSupported(m)) || "";
+        recorder = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 4e6 });
+        recorder.ondataavailable = e => { if (e.data && e.data.size) queue = queue.then(() => writable.write(e.data)).catch(() => {}); };
+        recorder.start(1000);
+      }
+      try { await v.play(); } catch (e) {}
+      await new Promise(res => {
+        const deadline = Date.now() + (to - from) * 1000 + 20000;
+        const tick = setInterval(() => {
+          const cur = v.currentTime;
+          drawClipFrame(cv, v, job, seg.c.start + cur * 1000);
+          job.onProgress && job.onProgress(Math.min(1, (done + Math.max(0, cur - from)) / total));
+          if (cur >= to || v.ended || clipState.cancel || Date.now() > deadline) { clearInterval(tick); res(); }
+        }, 1000 / fps);
+      });
+      done += to - from;
+      closeChunkVideo(v);
+    }
+  } finally {
+    if (recorder && recorder.state !== "inactive") await new Promise(res => { recorder.onstop = res; try { recorder.stop(); } catch (e) { res(); } });
+    await queue;
+    try { await writable.close(); } catch (e) {}
+    try { stream && stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  }
+  if (first) { try { await clipsDir.removeEntry(job.outName); } catch (e) {} throw new Error("no readable video for " + job.time); }
+  return "clips/" + job.outName;
+}
+// jobs: [{ ev (object to receive clipFile), dir, chunks (chunkWindows), t, serial, type, time, outline }]
+async function runClipJobs(jobs, opts) {
+  const pre = CFG.rec.clipPre ?? 60, post = CFG.rec.clipPost ?? 60;
+  clipState.running = true; clipState.cancel = false;
+  $("clipModal").style.display = "flex";
+  const made = []; let ok = 0, fail = 0;
+  try {
+    for (let i = 0; i < jobs.length; i++) {
+      if (clipState.cancel) break;
+      const j = jobs[i];
+      // a second event on the same unit inside an existing clip's window shares that clip
+      const dup = made.find(m => m.serial === j.serial && Math.abs(m.t - j.t) < (pre + post) * 500);
+      if (dup) { if (j.ev) j.ev.clipFile = dup.file; continue; }
+      $("clipMsg").textContent = "Clip " + (i + 1) + " of " + jobs.length + " — " + j.serial + " · " + j.type + " · " + j.time +
+        "  (" + pre + " s before → " + post + " s after)";
+      $("clipFill").style.width = "0%";
+      try {
+        const file = await makeClip({ ...j, pre, post,
+          outName: "clip_" + safeName(j.serial) + "_" + j.type + "_" + String(j.time).replace(/:/g, "") + ".webm",
+          onProgress: p => { $("clipFill").style.width = Math.round(p * 100) + "%"; } });
+        made.push({ serial: j.serial, t: j.t, file });
+        if (j.ev) j.ev.clipFile = file;
+        ok++;
+      } catch (e) { fail++; console.warn("clip failed:", j.serial, j.time, e); }
+    }
+  } finally {
+    clipState.running = false;
+    $("clipModal").style.display = "none";
+  }
+  if (opts?.live) { rebuildEventTable(); scheduleEventsWrite(); }
+  banner("🎬 " + ok + " event clip" + (ok === 1 ? "" : "s") + " saved to clips/" + (fail ? " · " + fail + " failed (no video for that time)" : "") + (clipState.cancel ? " · rest skipped" : ""));
+  return { ok, fail, made };
+}
+function outlineOfSerial(serial) {
+  const z = S.zones.find(z => z.serial === serial);
+  return z ? { x: z.x, y: z.y, w: z.w, h: z.h } : null;
+}
+async function clipNightEvents() {
+  if (!S.session?.dir || !S.session.chunks?.length) return;
+  const evs = S.events.filter(e => FAULT_TYPES.includes(e.type) && !e.clipFile);
+  if (!evs.length) return;
+  const chunks = chunkWindows(S.session.chunks, Date.now());
+  await runClipJobs(evs.map(ev => ({ ev, dir: S.session.dir, chunks, t: ev.t, serial: ev.serial, type: ev.type, time: ev.time, outline: outlineOfSerial(ev.serial) })), { live: true });
+}
+async function clipEvent(ev) {
+  if (clipState.running) return banner("A clip is already being made — wait for it to finish.");
+  if (!S.session?.dir || !S.session.chunks?.length) return banner("No night folder / video for this session.");
+  const post = CFG.rec.clipPost ?? 60, wait = ev.t + post * 1000 - Date.now();
+  if (S.mode === "monitoring" && wait > 0) return banner("Wait " + Math.ceil(wait / 1000) + " s — the after-event part of this clip is still being recorded.");
+  if (S.mode === "monitoring" && S.rec) { banner("Rotating the current video chunk so it can be read (≈1 s gap in the recording)…"); await rotateChunk(); }
+  const chunks = chunkWindows(S.session.chunks, Date.now());
+  await runClipJobs([{ ev, dir: S.session.dir, chunks, t: ev.t, serial: ev.serial, type: ev.type, time: ev.time, outline: outlineOfSerial(ev.serial) }], { live: true });
+}
+// morning tool: pick a past night_… folder and clip every fault from its rec_*.webm files
+// (chunk start times come from the file names; works even if the tab crashed before End Night)
+async function clipFromFolder() {
+  if (clipState.running) return banner("Clips are already being made.");
+  let dir;
+  try { dir = await window.showDirectoryPicker({ mode: "readwrite" }); } catch (e) { return; }
+  let events, session = {};
+  try { events = JSON.parse(await (await (await dir.getFileHandle("events.json")).getFile()).text()); }
+  catch (e) { return banner("Pick a night_… folder — no events.json in \"" + dir.name + "\"."); }
+  try { session = JSON.parse(await (await (await dir.getFileHandle("session.json")).getFile()).text()); } catch (e) {}
+  const evs = events.filter(e => FAULT_TYPES.includes(e.type) && e.t);
+  if (!evs.length) return banner("No unit fault events in " + dir.name + " — nothing to clip.");
+  const base = new Date(session.start ? Date.parse(session.start) : Math.min(...evs.map(e => e.t)));
+  const chunks = [];
+  for await (const [name, h] of dir.entries()) {
+    const m = name.match(/^rec_(\d\d)(\d\d)(\d\d)\.webm$/);
+    if (!m || h.kind !== "file") continue;
+    const d = new Date(base); d.setHours(+m[1], +m[2], +m[3], 0);
+    if (d.getTime() < base.getTime() - 120000) d.setDate(d.getDate() + 1); // past midnight
+    chunks.push({ name, start: d.getTime() });
+  }
+  chunks.sort((a, b) => a.start - b.start);
+  if (!chunks.length) return banner("No rec_*.webm video chunks in " + dir.name + " (auto-deleted, or the night had no video).");
+  const endT = Math.max(chunks[chunks.length - 1].start + (CFG.rec.chunkMin || 20) * 60000, ...evs.map(e => e.t + 60000));
+  const outlines = {};
+  for (const u of session.units || []) outlines[u.serial] = u.outline;
+  const r = await runClipJobs(evs.map(ev => ({ ev, dir, chunks: chunkWindows(chunks, endT), t: ev.t, serial: ev.serial, type: ev.type,
+    time: ev.time || new Date(ev.t).toLocaleTimeString("en-GB"), outline: outlines[ev.serial] || null })));
+  if (r.ok) { try { await writeFile(dir, "events.json", new Blob([JSON.stringify(events, null, 2)], { type: "application/json" })); } catch (e) {} }
+}
+async function playClip(clipFile, dir) {
+  try {
+    const f = await (await (await dir.getDirectoryHandle("clips")).getFileHandle(clipFile.replace(/^clips\//, ""))).getFile();
+    const v = $("shotVid");
+    v.src = URL.createObjectURL(f);
+    v.onloadedmetadata = () => { // recorded WebM has no duration → scan once so the seek bar works
+      if (!isFinite(v.duration)) { v.currentTime = 1e101; v.onseeked = () => { v.onseeked = null; v.currentTime = 0; v.play().catch(() => {}); }; }
+    };
+    v.style.display = ""; $("shotImg").style.display = "none";
+    $("shotModal").style.display = "flex";
+    v.play().catch(() => {});
+  } catch (e) { banner("Clip not found: " + clipFile); }
+}
+function closeShotModal() {
+  $("shotModal").style.display = "none";
+  const v = $("shotVid");
+  try { v.pause(); if (v.src) URL.revokeObjectURL(v.src); v.removeAttribute("src"); v.load(); } catch (e) {}
+  v.style.display = "none"; $("shotImg").style.display = "";
 }
 
 /* ================= session control ================= */
@@ -11532,20 +11774,26 @@ async function stopMonitoring() {
   if (!confirm("End the night session?")) return;
   await stopRecording();
   try { S.wakeLock?.release(); } catch (e) {}
-  // storage cleanup: keep only video chunks that overlap a real unit event (± one chunk)
+  // parking-surveillance style: cut a short clip around every fault before any cleanup
+  if (S.session?.dir && CFG.rec.clips) { try { await clipNightEvents(); } catch (e) {} }
+  // storage cleanup: keep only video chunks that overlap a real unit event (± one chunk);
+  // with "clips only" and every fault clipped, the raw chunks are redundant — delete all
   if (S.session?.dir && CFG.rec.autoClean && S.session.chunks?.length) {
     try {
       const evs = S.events.filter(e => FAULT_TYPES.includes(e.type));
+      const allClipped = !!CFG.rec.clipsOnly && evs.length > 0 && evs.every(e => e.clipFile);
       const chunks = S.session.chunks, endT = Date.now(), keep = new Set();
       chunks.forEach((c, i) => {
         const cEnd = chunks[i + 1] ? chunks[i + 1].start : endT;
-        if (evs.some(e => e.t >= c.start && e.t <= cEnd)) { keep.add(i - 1); keep.add(i); keep.add(i + 1); }
+        if (!allClipped && evs.some(e => e.t >= c.start && e.t <= cEnd)) { keep.add(i - 1); keep.add(i); keep.add(i + 1); }
       });
       let removed = 0;
       for (let i = 0; i < chunks.length; i++) {
         if (!keep.has(i)) { try { await S.session.dir.removeEntry(chunks[i].name); removed++; } catch (e) {} }
       }
-      S.session.cleanupNote = removed + " of " + chunks.length + " video chunks had no unit events and were auto-deleted";
+      S.session.cleanupNote = allClipped
+        ? removed + " of " + chunks.length + " raw video chunks deleted — every fault is kept as a clips/ file"
+        : removed + " of " + chunks.length + " video chunks had no unit events and were auto-deleted";
       if (removed) banner("Storage cleanup: " + S.session.cleanupNote + ".");
     } catch (e) {}
   }
@@ -11622,7 +11870,7 @@ function reportText() {
       if (z.ev.glitch) parts.push(z.ev.glitch + "x glitch");
       lines.push("- " + z.serial + " (unit " + (z.i + 1) + "): " + parts.join(", "));
       for (const ev of S.events.filter(e => e.serial === z.serial && FAULT_TYPES.includes(e.type)))
-        lines.push("    " + ev.time + "  " + ev.type + " — " + ev.detail);
+        lines.push("    " + ev.time + "  " + ev.type + " — " + ev.detail + (ev.clipFile ? "  [video: " + ev.clipFile + "]" : ""));
     }
     lines.push("");
   }
@@ -11630,8 +11878,8 @@ function reportText() {
   return lines.join("\n");
 }
 function exportCsv() {
-  const rows = [["time", "iso", "unit", "serial", "type", "detail", "snapshot"]];
-  for (const ev of S.events) rows.push([ev.time, ev.iso, ev.zone, ev.serial, ev.type, ev.detail, ev.shotFile || ""]);
+  const rows = [["time", "iso", "unit", "serial", "type", "detail", "snapshot", "clip"]];
+  for (const ev of S.events) rows.push([ev.time, ev.iso, ev.zone, ev.serial, ev.type, ev.detail, ev.shotFile || "", ev.clipFile || ""]);
   const csv = rows.map(r => r.map(v => '"' + String(v ?? "").replace(/"/g, '""') + '"').join(",")).join("\r\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
@@ -11719,10 +11967,17 @@ $("btnReport").onclick = async () => {
   catch (e) { $("reportHint").textContent = "Copy failed — report.txt is still saved in the night folder."; }
   setTimeout(() => $("reportHint").textContent = "", 4000);
 };
-$("shotModal").onclick = () => { $("shotModal").style.display = "none"; };
+$("shotModal").onclick = closeShotModal;
+$("shotVid").onclick = e => e.stopPropagation();
+$("btnClipCancel").onclick = () => { clipState.cancel = true; $("clipMsg").textContent = "Skipping…"; };
+$("btnClipFolder").onclick = clipFromFolder;
+$("setClips").checked = CFG.rec.clips !== false;
+$("setClips").onchange = e => { CFG.rec.clips = e.target.checked; saveCfg(); };
+$("setClipsOnly").checked = !!CFG.rec.clipsOnly;
+$("setClipsOnly").onchange = e => { CFG.rec.clipsOnly = e.target.checked; saveCfg(); };
 [["setOffLuma", "det", "offLuma"], ["setOnLuma", "det", "onLuma"], ["setDebounce", "det", "debounce"],
  ["setStaticDiff", "det", "staticDiff"], ["setStaticSecs", "det", "staticSecs"], ["setGlitchDiff", "det", "glitchDiff"], ["setBodyStretch", "det", "bodyStretch"], ["setGraceSecs", "det", "graceSecs"],
- ["setChunkMin", "rec", "chunkMin"], ["setBitrate", "rec", "mbps"], ["setRecFps", "rec", "fps"]].forEach(([id, grp, key]) => {
+ ["setChunkMin", "rec", "chunkMin"], ["setBitrate", "rec", "mbps"], ["setRecFps", "rec", "fps"], ["setClipPre", "rec", "clipPre"], ["setClipPost", "rec", "clipPost"]].forEach(([id, grp, key]) => {
   const el = $(id); el.value = CFG[grp][key];
   el.onchange = () => { const v = parseFloat(el.value); if (!isNaN(v)) { CFG[grp][key] = v; saveCfg(); } };
 });

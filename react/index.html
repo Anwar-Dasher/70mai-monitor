@@ -56,29 +56,34 @@
         return fetch(URL_, { method: "POST", keepalive: true, headers: { "content-type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) })
           .then(function (r) { return r.json(); }).then(function (d) { return !!d.ok; }).catch(function () { return false; });
       }
-      var st = { started: false, lastChunk: 0, seen: {}, hb: null, curName: "", curDir: null, lastSize: 0, lastGrowAt: 0, stallAlerted: false, watch: null };
+      var st = { started: false, lastChunk: 0, seen: {}, hb: null, curName: "", lastWriteAt: 0, written: 0, stallAlerted: false, watch: null };
+      // An open chunk reads as 0 bytes until it is closed (Chrome writes to a swap file),
+      // so watch the writes themselves: every successful write() on any writable stream
+      // marks the recorder alive. A healthy MediaRecorder writes every second.
+      var origWrite = window.FileSystemWritableFileStream && FileSystemWritableFileStream.prototype.write;
+      if (origWrite) FileSystemWritableFileStream.prototype.write = function (data) {
+        var p = origWrite.apply(this, arguments);
+        try { p.then(function () { st.lastWriteAt = Date.now(); st.stallAlerted = false; st.written += (data && data.size) || 0; }, function () {}); } catch (e) {}
+        return p;
+      };
       function startStallWatch() {
         if (st.watch) return;
-        // Every 60s: measure the current chunk's size. A healthy MediaRecorder grows
-        // the file every second; if it hasn't grown for ~4 min the recording stalled
+        // Every 60s: ~4 min without a successful write = recording stalled
         // (tab throttled / crashing / out of memory) — DM once, re-arm on recovery.
         st.watch = setInterval(function () {
-          if (!st.curDir || !st.curName) return;
-          st.curDir.getFileHandle(st.curName).then(function (h) { return h.getFile(); }).then(function (f) {
-            var now = Date.now();
-            if (f.size > st.lastSize) { st.lastSize = f.size; st.lastGrowAt = now; st.stallAlerted = false; }
-            else if (!st.stallAlerted && st.lastGrowAt && now - st.lastGrowAt > 4 * 60000) {
-              st.stallAlerted = true;
-              send("stalled", { detail: "chunk " + st.curName + " stopped growing at " + Math.round(st.lastSize / 1e6) + " MB", time: new Date().toLocaleTimeString("en-GB") });
-            }
-          }).catch(function () {});
+          if (!st.curName || !st.lastWriteAt) return;
+          var now = Date.now();
+          if (!st.stallAlerted && now - st.lastWriteAt > 4 * 60000) {
+            st.stallAlerted = true;
+            send("stalled", { detail: "chunk " + st.curName + " stopped at ~" + Math.round(st.written / 1e6) + " MB, no write for " + Math.round((now - st.lastWriteAt) / 60000) + " min", time: new Date().toLocaleTimeString("en-GB") });
+          }
         }, 60000);
       }
       function onFile(name, dir) {
         var now = Date.now();
         if (/^rec_\d+\.webm$/.test(name)) {
           st.lastChunk = now;
-          st.curName = name; st.curDir = dir || st.curDir; st.lastSize = 0; st.lastGrowAt = now; st.stallAlerted = false;
+          st.curName = name; st.lastWriteAt = now; st.written = 0; st.stallAlerted = false;
           if (!st.started) {
             st.started = true;
             send("start", { units: "?", time: new Date().toLocaleTimeString("en-GB") });
