@@ -110,7 +110,13 @@
           }
           return;
         }
-        var m = name.match(/^e[\w]+_(.+)_([A-Z_]+)_(\d{6})_zone\.jpe?g$/i);
+        // Snapshot names are e<id>_<serial>_<TYPE>_<HHMMSS>_zone.jpg. The event type
+        // itself can contain an underscore (STUCK_STATIC, AUTO_OFF, TRACK_MOVE), and
+        // \w matches underscores too — so a greedy e[\w]+_ prefix used to swallow the
+        // serial and then split the TYPE in half, giving DMs like
+        // "Unit: STUCK / Event: STATIC". Match the id as digits only and the type
+        // against the known set so there is nothing left to guess.
+        var m = name.match(/^e\d+_(.+)_(AUTO_OFF|RESTART|STUCK_STATIC|GLITCH|TRACK_MOVE|DISTURBANCE|INFO)_(\d{6})_zone\.jpe?g$/);
         if (!m) return;
         var serial = m[1], type = m[2].toUpperCase(), t = m[3];
         if (type === "DISTURBANCE" || type === "INFO") return; // bench-level / info — not unit faults
