@@ -81,6 +81,15 @@
       }
       function onFile(name, dir) {
         var now = Date.now();
+        // End Night writes report.txt last. That is our only reliable "the session
+        // finished properly" signal, and it disarms the server watchdog so closing
+        // the tab afterwards is not mistaken for a crash.
+        if (name === "report.txt") {
+          clearInterval(st.hb); clearInterval(st.pg); clearInterval(st.watch);
+          st.watch = null; st.curName = "";
+          send("end", { events: Object.keys(st.seen).length, time: new Date().toLocaleTimeString("en-GB") });
+          return;
+        }
         if (/^rec_\d+\.webm$/.test(name)) {
           st.lastChunk = now;
           st.curName = name; st.lastWriteAt = now; st.written = 0; st.stallAlerted = false;
@@ -92,6 +101,12 @@
             st.hb = setInterval(function () {
               if (Date.now() - st.lastChunk < 25 * 60000) send("heartbeat", { units: "recording", events: Object.keys(st.seen).length, elapsed: "react build" });
             }, 3600000);
+            // Silent 5-min liveness ping for the server-side watchdog. A frozen or
+            // discarded tab stops sending these, which is the only way the silence
+            // can be noticed — the tab cannot report its own death. No DM is sent
+            // for a ping; the hourly heartbeat above is the one a human reads.
+            clearInterval(st.pg);
+            st.pg = setInterval(function () { send("ping", {}); }, 5 * 60000);
           }
           return;
         }
