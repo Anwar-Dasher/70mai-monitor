@@ -85,6 +85,11 @@
         // finished properly" signal, and it disarms the server watchdog so closing
         // the tab afterwards is not mistaken for a crash.
         if (name === "report.txt") {
+          // Once per session: End Night then copies report.txt into the results
+          // folder (Google Drive), which must not send a second "end" DM.
+          // Resetting `started` also lets a second session in the same tab announce itself.
+          if (!st.started) return;
+          st.started = false;
           clearInterval(st.hb); clearInterval(st.pg); clearInterval(st.watch);
           st.watch = null; st.curName = "";
           send("end", { events: Object.keys(st.seen).length, time: new Date().toLocaleTimeString("en-GB") });
@@ -138,8 +143,8 @@
       });
     })();
     </script>
-    <script type="module" crossorigin src="assets/index-DGWYat00.js"></script>
-    <link rel="stylesheet" crossorigin href="assets/index-ri2lhEDe.css">
+    <script type="module" crossorigin src="assets/index-D2cds2K-.js"></script>
+    <link rel="stylesheet" crossorigin href="assets/index-C4q2PXC3.css">
   </head>
   <body>
     <div id="root"></div>
