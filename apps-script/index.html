@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>70mai monitor — Google Drive links setup</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f172a; color: #e2e8f0; font: 15px/1.55 system-ui, -apple-system, Segoe UI, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 32px 0 8px; color: #93c5fd; text-transform: uppercase; letter-spacing: .04em; }
+  p, li { color: #cbd5e1; }
+  ol li, ul li { margin: 8px 0; }
+  code, kbd { background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 1px 5px; font-size: 13px; color: #f8fafc; }
+  pre { background: #020617; border: 1px solid #334155; border-radius: 8px; padding: 12px; overflow: auto; max-height: 360px; font-size: 12px; line-height: 1.45; color: #e2e8f0; }
+  button { background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #334155; color: #94a3b8; cursor: default; }
+  button.ok { background: #059669; }
+  input { width: 100%; box-sizing: border-box; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; color: #f8fafc; font: inherit; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  .box { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .box.warn { border-color: #b45309; background: #1c1917; }
+  .muted { color: #94a3b8; font-size: 13px; }
+  .out { word-break: break-all; font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #a7f3d0; }
+  .ok { color: #6ee7b7; }
+  .bad { color: #fca5a5; }
+  a { color: #93c5fd; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Google Drive links in the Lark fault messages</h1>
+  <p class="muted">One-time setup, about 5 minutes, done once per Google account. Each bench laptop then needs one link opened once (step 3).</p>
+
+  <p>Each fault message in Lark can carry a link that opens that dashcam's folder in Google Drive
+  (<code>70mai Overnight / night_… / &lt;serial&gt;</code>). Google only gives out folder links by their ID,
+  so a small script in <b>your own Google account</b> looks the ID up.</p>
+
+  <div class="box warn">
+    <b>Before you start — both must already be true, or the links stay off with no error:</b>
+    <ul style="margin:8px 0 0">
+      <li>The bench laptop already sends Lark messages: the monitor shows the small green note <b>📨 Lark alerts armed</b> at the bottom-left. The Drive link only travels inside those messages.</li>
+      <li>In the monitor, <b>Copy results to</b> (or the Save Folder) is <b>Google Drive (G:) → My Drive → 70mai Overnight</b>, and that Drive belongs to the <b>same company Google account</b> you will use below. The script can only find folders that Google Drive for desktop has uploaded there.</li>
+    </ul>
+  </div>
+
+  <h2>1 · Create the script</h2>
+  <ol>
+    <li>Open <a href="https://script.google.com/home/start" target="_blank" rel="noopener">script.google.com</a>, signed in with that <b>company</b> Google account, and click <b>New project</b>.</li>
+    <li>Click <b>Untitled project</b> at the top-left and rename it <code>70mai Drive links</code>.</li>
+    <li>Delete the sample text in the editor, click <b>Copy script</b> below, paste it in, and press <kbd>Ctrl</kbd>+<kbd>S</kbd>.</li>
+  </ol>
+  <div class="box">
+    <div class="row">
+      <button id="copyScript">Copy script</button>
+      <span class="muted">or open <a href="drive-folder-lookup.js" target="_blank" rel="noopener">drive-folder-lookup.js</a> and copy everything</span>
+    </div>
+    <pre id="script">Loading…</pre>
+  </div>
+
+  <h2>2 · Publish it</h2>
+  <ol>
+    <li>Click <b>Deploy</b> (top-right) → <b>New deployment</b>.</li>
+    <li>Click the gear next to "Select type" and choose <b>Web app</b>.</li>
+    <li>Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>, then click <b>Deploy</b>.</li>
+    <li>Click <b>Authorize access</b> and pick the company account. Google asks you to allow the script to access your Google Drive — it only reads folder names and IDs and never changes files. Because it is your own script, Google shows "Google hasn't verified this app": click <b>Advanced</b> → <b>Go to 70mai Drive links (unsafe)</b> → <b>Allow</b>.</li>
+    <li>Copy the <b>Web app URL</b> (it ends in <code>/exec</code>).</li>
+  </ol>
+
+  <h2>3 · Tell the monitor about it</h2>
+  <div class="box">
+    <p style="margin-top:0">Paste the Web app URL here. This page checks that the script answers without a sign-in (the setting that matters most) and builds the monitor link:</p>
+    <input id="exec" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false">
+    <div id="check" class="muted" style="margin:8px 0"></div>
+    <div class="row">
+      <button id="copyLink" disabled>Copy monitor link</button>
+    </div>
+    <div id="link" class="out"></div>
+  </div>
+  <ol>
+    <li>Open that monitor link <b>once</b> on the bench laptop (it is the usual monitor link with <code>?gdrive=…</code> added). The monitor asks <i>"Use this Google Apps Script…?"</i> — click <b>OK</b>. The laptop remembers it.</li>
+    <li>The green note now reads <b>📨 Lark alerts armed · Drive links on (script …xxxxxxxx)</b>. Those eight characters are the end of your script's address — a quick way to see the right script is in use.</li>
+    <li>If the laptop's link also carries <code>?larkkey=</code> or <code>?cap=</code>, keep them; they can all be in one link, joined with <code>&amp;</code>.</li>
+  </ol>
+
+  <h2>What you get</h2>
+  <ul>
+    <li>Fault messages: <code>Google Drive folder: https://drive.google.com/drive/folders/…</code> — opens that unit's folder directly.</li>
+    <li>If a fault happens in the first minutes of the night, before Google Drive for desktop has uploaded the unit's folder, the message carries the script's own link instead. Opening it shows a small page with one button, <b>Open in Google Drive</b>, which goes to the folder once it exists.</li>
+    <li>The end-of-night message links the night folder the same way.</li>
+  </ul>
+
+  <h2>Good to know</h2>
+  <ul>
+    <li><b>Updating the script later</b> (for example after it changes on this page): paste the new script over the old one, save, then <b>Deploy → Manage deployments → ✎ (edit) → Version: New version → Deploy</b>. The URL stays the same, so the laptops need nothing. A brand-new deployment would make a new URL.</li>
+    <li><b>If "Anyone" is not offered</b> (company policy), choose <b>Anyone within &lt;your company&gt;</b>. The monitor then cannot ask the script directly, so fault messages always carry the script's link rather than the direct one; it still opens the folder for anyone signed into the company account.</li>
+    <li><b>Narrower permission (optional):</b> by default Google asks for full Drive access even though the script only reads. To ask for read-only instead, in the script editor open <b>Project Settings</b> (gear), tick <b>Show "appsscript.json" manifest file</b>, open that file and add <code>"oauthScopes": ["https://www.googleapis.com/auth/drive.readonly"]</code> inside the braces, then deploy a new version and re-authorize.</li>
+    <li><b>To switch it off</b> on a laptop, open the monitor once with <code>?gdrive=off</code>.</li>
+    <li>The script never changes anything in Drive, and a folder ID on its own does not let anyone open the files — opening a folder still needs that person's own Drive access.</li>
+  </ul>
+</main>
+<script>
+(function () {
+  var MONITOR = "https://anwar-dasher.github.io/70mai-monitor/react/";
+  var EXEC_RE = /^https:\/\/script\.google\.com\/(macros\/s\/|a\/macros\/[A-Za-z0-9.-]+\/s\/)[A-Za-z0-9_-]+\/exec$/;
+  var pre = document.getElementById("script");
+  var scriptText = "";
+  fetch("drive-folder-lookup.js").then(function (r) { return r.text(); }).then(function (t) {
+    scriptText = t; pre.textContent = t;
+  }).catch(function () { pre.textContent = "Could not load the script here — open drive-folder-lookup.js (link above) and copy everything."; });
+
+  function flash(btn, label, ok) {
+    var old = btn.textContent; btn.textContent = label; if (ok) btn.classList.add("ok");
+    setTimeout(function () { btn.textContent = old; btn.classList.remove("ok"); }, 2200);
+  }
+  function selectAll(el) {
+    try { var r = document.createRange(); r.selectNodeContents(el); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch (e) {}
+  }
+  function copy(text, btn, fallbackEl) {
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+      .then(function () { flash(btn, "Copied ✓", true); })
+      .catch(function () {
+        var ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        if (ok) { flash(btn, "Copied ✓", true); }
+        else { flash(btn, "Copy blocked — text selected, press Ctrl+C", false); if (fallbackEl) selectAll(fallbackEl); }
+      });
+  }
+  document.getElementById("copyScript").addEventListener("click", function () {
+    if (scriptText) copy(scriptText, this, pre);
+    else flash(this, "Script not loaded — use the drive-folder-lookup.js link", false);
+  });
+
+  var exec = document.getElementById("exec"), out = document.getElementById("link"), check = document.getElementById("check"), copyLink = document.getElementById("copyLink");
+  var probeTimer = null, probeSeq = 0;
+  function probe(v) {
+    var seq = ++probeSeq;
+    check.className = "muted";
+    check.textContent = "Checking that the script answers without a sign-in…";
+    var ctl = window.AbortController ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, 10000) : null;
+    fetch(v + "?night=night_2000-01-01_0000&serial=check&json=1", ctl ? { signal: ctl.signal } : {})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (seq !== probeSeq) return;
+        if (d && d.ok) { check.className = "ok"; check.textContent = "✓ The script answers without a sign-in. Copy the monitor link below."; }
+        else if (d && d.error === "root-folder-missing") { check.className = "bad"; check.textContent = "✓ The script answers, but that Google account has no folder named “70mai Overnight”. Create it in My Drive (the monitor's Copy results to folder) and the links will work."; }
+        else { check.className = "ok"; check.textContent = "✓ The script answers (" + JSON.stringify(d).slice(0, 80) + ")."; }
+      })
+      .catch(function () {
+        if (seq !== probeSeq) return;
+        check.className = "bad";
+        check.textContent = "✗ The script does not answer without a sign-in. In the script editor: Deploy → Manage deployments → ✎ → Who has access: Anyone → Deploy, then paste the URL again.";
+      })
+      .then(function () { if (timer) clearTimeout(timer); });
+  }
+  function update() {
+    var v = exec.value.trim();
+    var ok = EXEC_RE.test(v);
+    copyLink.disabled = !ok;
+    out.textContent = ok ? MONITOR + "?gdrive=" + v : "";
+    clearTimeout(probeTimer);
+    if (!v) { check.className = "muted"; check.textContent = ""; return; }
+    if (/\/dev$/.test(v)) { check.className = "bad"; check.textContent = "That is the test address (ends in /dev). Use Deploy → New deployment (or Manage deployments) and copy the Web app URL, which ends in /exec."; return; }
+    if (!ok) { check.className = "bad"; check.textContent = "That does not look like a Web app URL — it should start with https://script.google.com/ and end in /exec."; return; }
+    probeTimer = setTimeout(function () { probe(v); }, 500);
+  }
+  exec.addEventListener("input", update);
+  copyLink.addEventListener("click", function () { copy(out.textContent, this, out); });
+})();
+</script>
+</body>
+</html>

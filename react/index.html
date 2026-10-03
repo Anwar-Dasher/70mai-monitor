@@ -49,6 +49,32 @@
       }
       var key = "";
       try { key = localStorage.getItem("s600larkkey") || ""; } catch (e) {}
+      // Google Drive links in the fault DMs: a Google Apps Script in the technician's own
+      // account (see ../apps-script/) answers "which Drive folder is night/serial". Arm once
+      // with ?gdrive=<the script's /exec address> (?gdrive=off to stop). When a fault happens
+      // the page asks it and puts the folder's own drive.google.com link in the DM; if Drive
+      // has not uploaded the folder yet, the DM carries the script's link, which redirects.
+      // personal: script.google.com/macros/s/<id>/exec · Workspace: script.google.com/a/macros/<domain>/s/<id>/exec
+      var GDRIVE_RE = /^https:\/\/script\.google\.com\/(macros\/s\/|a\/macros\/[A-Za-z0-9.-]+\/s\/)[A-Za-z0-9_-]+\/exec$/;
+      var gdrive = "";
+      try { gdrive = localStorage.getItem("s600gdrive") || ""; } catch (e) {}
+      if (p.has("gdrive")) {
+        var g = String(p.get("gdrive") || "").trim();
+        if (!g || g === "off") {
+          try { localStorage.removeItem("s600gdrive"); } catch (e) {}
+          gdrive = "";
+        } else if (!GDRIVE_RE.test(g)) {
+          alert("Drive links NOT switched on: the ?gdrive= address should be the script's Web app URL, which ends in /exec.\n\nGot: " + g.slice(0, 120));
+        } else if (g !== gdrive) {
+          // A link alone must not re-point the DMs at somebody else's script — ask first.
+          if (confirm("Use this Google Apps Script for the Google Drive links in the Lark messages?\n\n" + g)) {
+            try { localStorage.setItem("s600gdrive", g); } catch (e) {}
+            gdrive = g;
+          }
+        }
+      }
+      if (!GDRIVE_RE.test(gdrive)) gdrive = "";
+      var gdriveId = gdrive ? gdrive.replace(/\/exec$/, "").split("/").pop() : "";
       if (!key || !window.FileSystemDirectoryHandle) return;
       var URL_ = "https://refurbish-department-workstation.netlify.app/.netlify/functions/monitor-alert";
       function send(kind, payload) {
@@ -57,7 +83,42 @@
           .then(function (r) { return r.json(); }).then(function (d) { return !!d.ok; }).catch(function () { return false; });
       }
       var st = { started: false, lastChunk: 0, seen: {}, hb: null, curName: "", lastWriteAt: 0, written: 0, stallAlerted: false, watch: null,
-        night: "", flagged: {}, nEvents: 0 };
+        night: "", flagged: {}, nEvents: 0, driveUrls: {} };
+      // The script's own link for a night folder (serial = "") or a unit folder. Needs no
+      // lookup: opened later, it shows a one-click page to the folder once Drive has it.
+      function clickUrl(night, serial) {
+        return gdrive + "?night=" + encodeURIComponent(night) + (serial ? "&serial=" + encodeURIComponent(serial) : "");
+      }
+      var isFolderUrl = function (u) { return /^https:\/\/drive\.google\.com\/drive\/folders\/[A-Za-z0-9_-]+$/.test(String(u)); };
+      // Resolves to the Drive link for this night's unit (serial), or the night folder itself
+      // (serial = ""): the folder's own drive.google.com link when Drive already has it, else
+      // the script's link. "" when not armed. Never takes more than ~8 s, so a fault DM is
+      // delayed by at most that. Results are cached per night + serial; a reply's night
+      // folder is cached too, so End Night usually has the night link ready without waiting.
+      function driveLookup(serial) {
+        if (!gdrive || !st.night) return Promise.resolve("");
+        var night = st.night, k = night + "|" + (serial || "");
+        if (st.driveUrls[k]) return Promise.resolve(st.driveUrls[k]);
+        var ctl = window.AbortController ? new AbortController() : null;
+        var timer = ctl ? setTimeout(function () { ctl.abort(); }, 8000) : null;
+        return fetch(clickUrl(night, serial) + "&json=1", ctl ? { signal: ctl.signal } : {})
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok && d.night && isFolderUrl(d.night.url)) st.driveUrls[night + "|"] = d.night.url;
+            var hit = d && d.ok && (serial ? d.unit : d.night);
+            if (hit && isFolderUrl(hit.url)) {
+              st.driveUrls[k] = hit.url;
+              return hit.url;
+            }
+            console.warn("[70mai] Drive folder for " + (serial || night) + " is not in Google Drive yet — the DM carries the script's link instead");
+            return clickUrl(night, serial);
+          })
+          .catch(function (e) {
+            console.warn("[70mai] Drive link lookup failed (" + ((e && e.name) || e) + ") — the DM carries the script's link instead");
+            return clickUrl(night, serial);
+          })
+          .then(function (u) { if (timer) clearTimeout(timer); return u; });
+      }
       // An open chunk reads as 0 bytes until it is closed (Chrome writes to a swap file),
       // so watch the writes themselves: every successful write() on any writable stream
       // marks the recorder alive. A healthy MediaRecorder writes every second.
@@ -93,8 +154,13 @@
           st.started = false;
           clearInterval(st.hb); clearInterval(st.pg); clearInterval(st.watch);
           st.watch = null; st.curName = "";
-          var flagged = Object.keys(st.flagged);
-          send("end", { events: st.nEvents, flagged: flagged.join(", "), time: new Date().toLocaleTimeString("en-GB") });
+          // Sent at once — keepalive survives the tab being closed right after End Night,
+          // and the server watchdog only stands down on this DM. The night-folder link is
+          // whatever is already known: the direct link if an earlier lookup cached it,
+          // else the script's link, which needs no lookup.
+          var endPayload = { events: st.nEvents, flagged: Object.keys(st.flagged).join(", "), time: new Date().toLocaleTimeString("en-GB") };
+          if (gdrive && st.night) endPayload.driveUrl = st.driveUrls[st.night + "|"] || clickUrl(st.night, "");
+          send("end", endPayload);
           return;
         }
         if (/^rec_\d+\.webm$/.test(name)) {
@@ -118,6 +184,12 @@
             // for a ping; the hourly heartbeat above is the one a human reads.
             clearInterval(st.pg);
             st.pg = setInterval(function () { send("ping", {}); }, 5 * 60000);
+            // Warm the night-folder link for the end DM: Drive for desktop usually has the
+            // folder a few minutes after Start Monitoring (any fault lookup caches it too).
+            if (gdrive) {
+              setTimeout(function () { driveLookup(""); }, 3 * 60000);
+              setTimeout(function () { driveLookup(""); }, 30 * 60000);
+            }
           }
           return;
         }
@@ -134,8 +206,14 @@
         if (st.seen[name]) return;
         st.seen[name] = 1;
         st.flagged[serial] = 1; st.nEvents++;
-        // night = the night_… folder name, so the server can link this unit's Google Drive folder
-        send("fault", { serial: serial, event: type, night: st.night, detail: "snapshot " + name, time: t.replace(/(\d\d)(\d\d)(\d\d)/, "$1:$2:$3") });
+        var time = t.replace(/(\d\d)(\d\d)(\d\d)/, "$1:$2:$3");
+        // night = the night_… folder name, so the server can link this unit's Google Drive folder;
+        // driveUrl = that link already resolved here, when the Apps Script route is armed
+        driveLookup(serial).then(function (u) {
+          var payload = { serial: serial, event: type, night: st.night, detail: "snapshot " + name, time: time };
+          if (u) payload.driveUrl = u;
+          send("fault", payload);
+        });
       }
       var orig = FileSystemDirectoryHandle.prototype.getFileHandle;
       FileSystemDirectoryHandle.prototype.getFileHandle = function (name, opts) {
@@ -149,15 +227,17 @@
         return origDir.apply(this, arguments);
       };
       window.__larkTest = function () { return send("test", {}); };
+      // Console check for the Drive links: __driveTest("SERIAL", "night_2026-10-02_1805")
+      window.__driveTest = function (serial, night) { if (night) st.night = String(night); return driveLookup(serial || ""); };
       window.addEventListener("load", function () {
         var b = document.createElement("div");
-        b.textContent = "📨 Lark alerts armed (?larkkey=off to disarm)";
+        b.textContent = "📨 Lark alerts armed" + (gdrive ? " · Drive links on (script …" + gdriveId.slice(-8) + ")" : "") + " (?larkkey=off to disarm)";
         b.style.cssText = "position:fixed;bottom:20px;left:8px;z-index:9999;font:11px sans-serif;color:#34d399;opacity:.8;pointer-events:none";
         document.body.appendChild(b);
       });
     })();
     </script>
-    <script type="module" crossorigin src="assets/index-CcbhgxLD.js"></script>
+    <script type="module" crossorigin src="assets/index-D-XalJJy.js"></script>
     <link rel="stylesheet" crossorigin href="assets/index-DTSNR1x8.css">
   </head>
   <body>
