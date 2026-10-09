@@ -235,6 +235,22 @@
         b.textContent = "📨 Lark alerts armed" + (gdrive ? " · Drive links on (script …" + gdriveId.slice(-8) + ")" : "") + " (?larkkey=off to disarm)";
         b.style.cssText = "position:fixed;bottom:20px;left:8px;z-index:9999;font:11px sans-serif;color:#34d399;opacity:.8;pointer-events:none";
         document.body.appendChild(b);
+        // Prove the key works now: a ping is silent server-side, and a wrong key (a new
+        // laptop armed with a typo, or the placeholder left in a copied link) would
+        // otherwise make every DM fail without a word on screen.
+        fetch(URL_, { method: "POST", headers: { "content-type": "text/plain;charset=utf-8" }, body: JSON.stringify({ key: key, kind: "ping" }) })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) return;
+            b.style.color = "#fbbf24";
+            b.textContent = (d && /key/i.test(String(d.error))
+              ? "⚠ Lark key REJECTED — no messages will be sent. Open the monitor once with ?larkkey=<the key from the first laptop>"
+              : "⚠ Lark alerts: server replied \"" + ((d && d.error) || "unexpectedly") + "\" — no messages will be sent");
+          })
+          .catch(function () {
+            b.style.color = "#fbbf24";
+            b.textContent = "⚠ Lark alert server unreachable from this laptop — check the network or a blocker; no messages will be sent";
+          });
       });
     })();
     </script>
