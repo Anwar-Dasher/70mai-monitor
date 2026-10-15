@@ -142,28 +142,32 @@
           }
         }, 60000);
       }
+      // End Night's last real write is report.txt. Its successful close is our only
+      // reliable "the session finished properly" signal, and it disarms the server
+      // watchdog so closing the tab afterwards is not mistaken for a crash.
+      function onReportSaved() {
+        // Once per session: End Night then copies report.txt into the results
+        // folder (Google Drive), which must not send a second "end" DM.
+        // Resetting `started` also lets a second session in the same tab announce itself.
+        if (!st.started) return;
+        st.started = false;
+        clearInterval(st.hb); clearInterval(st.pg); clearInterval(st.watch);
+        st.watch = null; st.curName = "";
+        // Sent at once — keepalive survives the tab being closed right after End Night,
+        // and the server watchdog only stands down on this DM. The night-folder link is
+        // whatever is already known: the direct link if an earlier lookup cached it,
+        // else the script's link, which needs no lookup.
+        var endPayload = { events: st.nEvents, flagged: Object.keys(st.flagged).join(", "), time: new Date().toLocaleTimeString("en-GB") };
+        if (gdrive && st.night) endPayload.driveUrl = st.driveUrls[st.night + "|"] || clickUrl(st.night, "");
+        send("end", endPayload);
+      }
       function onFile(name, dir) {
         var now = Date.now();
-        // End Night writes report.txt last. That is our only reliable "the session
-        // finished properly" signal, and it disarms the server watchdog so closing
-        // the tab afterwards is not mistaken for a crash.
-        if (name === "report.txt") {
-          // Once per session: End Night then copies report.txt into the results
-          // folder (Google Drive), which must not send a second "end" DM.
-          // Resetting `started` also lets a second session in the same tab announce itself.
-          if (!st.started) return;
-          st.started = false;
-          clearInterval(st.hb); clearInterval(st.pg); clearInterval(st.watch);
-          st.watch = null; st.curName = "";
-          // Sent at once — keepalive survives the tab being closed right after End Night,
-          // and the server watchdog only stands down on this DM. The night-folder link is
-          // whatever is already known: the direct link if an earlier lookup cached it,
-          // else the script's link, which needs no lookup.
-          var endPayload = { events: st.nEvents, flagged: Object.keys(st.flagged).join(", "), time: new Date().toLocaleTimeString("en-GB") };
-          if (gdrive && st.night) endPayload.driveUrl = st.driveUrls[st.night + "|"] || clickUrl(st.night, "");
-          send("end", endPayload);
-          return;
-        }
+        // report.txt is handled by the createWritable hook below: the end DM goes out only
+        // once the report has been written AND closed, not when End Night merely asks for
+        // its handle (2026-10-15: every End Night write failed on a Drive folder, the DM
+        // still went out, and there was no report).
+        if (name === "report.txt") return;
         if (/^rec_\d+\.webm$/.test(name)) {
           st.lastChunk = now;
           st.curName = name; st.lastWriteAt = now; st.written = 0; st.stallAlerted = false;
@@ -221,6 +225,26 @@
         try { if (opts && opts.create) onFile(String(name), this); } catch (e) {}
         return orig.apply(this, arguments);
       };
+      // The end DM waits for report.txt to be written and closed: wrap close() on the
+      // writable End Night opens for it. A failed write never closes, so no DM goes out
+      // and the server watchdog's silence alarm stays armed — which is the right outcome.
+      var origCW = window.FileSystemFileHandle && FileSystemFileHandle.prototype.createWritable;
+      if (origCW) FileSystemFileHandle.prototype.createWritable = function () {
+        var p = origCW.apply(this, arguments);
+        if (this.name === "report.txt") {
+          try {
+            p.then(function (ws) {
+              var oc = ws.close;
+              ws.close = function () {
+                var c = oc.apply(ws, arguments);
+                try { c.then(function () { onReportSaved(); }, function () {}); } catch (e) {}
+                return c;
+              };
+            }, function () {});
+          } catch (e) {}
+        }
+        return p;
+      };
       // Remember the night folder's name (night_YYYY-MM-DD_HHMM) for the Drive links
       var origDir = FileSystemDirectoryHandle.prototype.getDirectoryHandle;
       FileSystemDirectoryHandle.prototype.getDirectoryHandle = function (name, opts) {
@@ -254,7 +278,7 @@
       });
     })();
     </script>
-    <script type="module" crossorigin src="assets/index-Bljl9NXe.js"></script>
+    <script type="module" crossorigin src="assets/index-DG9XjL0-.js"></script>
     <link rel="stylesheet" crossorigin href="assets/index-TUs7GM4-.css">
   </head>
   <body>
